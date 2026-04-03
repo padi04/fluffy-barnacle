@@ -1,5 +1,6 @@
 import SpriteKit
 import UIKit
+import AVFoundation
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
 
@@ -14,10 +15,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private let paddleWidth: CGFloat = 100
     private let paddleHeight: CGFloat = 16
-    private let paddleOffset: CGFloat = 60
     private let ballRadius: CGFloat = 10
-    private let ballSpeed: CGFloat = 400
+    private let baseBallSpeed: CGFloat = 400
+    private let maxBallSpeed: CGFloat = 650
+    private let speedIncrement: CGFloat = 15
     private let aiSpeed: CGFloat = 3.5
+    private let winScore = 7
 
     // MARK: - Nodes
 
@@ -31,7 +34,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // MARK: - Haptics
 
     private let paddleHitFeedback = UIImpactFeedbackGenerator(style: .medium)
+    private let wallHitFeedback = UIImpactFeedbackGenerator(style: .light)
     private let goalFeedback = UINotificationFeedbackGenerator()
+
+    // MARK: - Audio
+
+    private var audioEngine: AVAudioEngine!
+    private var paddleToneBuffer: AVAudioPCMBuffer!
+    private var wallToneBuffer: AVAudioPCMBuffer!
+    private var scoreToneBuffer: AVAudioPCMBuffer!
+    private var winToneBuffer: AVAudioPCMBuffer!
+    private var playerNode: AVAudioPlayerNode!
 
     // MARK: - State
 
@@ -39,11 +52,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var aiScore = 0
     private var isPlaying = false
     private var lastUpdateTime: TimeInterval = 0
+    private var currentBallSpeed: CGFloat = 400
+    private var rallyCount = 0
+    private var safeAreaBottom: CGFloat = 0
+    private var safeAreaTop: CGFloat = 0
 
     // MARK: - Setup
 
     override func didMove(to view: SKView) {
         backgroundColor = .black
+
+        let insets = view.safeAreaInsets
+        safeAreaBottom = insets.bottom
+        safeAreaTop = insets.top
 
         physicsWorld.gravity = .zero
         physicsWorld.contactDelegate = self
@@ -56,32 +77,28 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         createCenterLine()
         createMessageLabel()
         prepareHaptics()
+        prepareAudio()
+        observeAppLifecycle()
 
         showMessage("Tap to Start")
     }
 
     private func createWalls() {
-        let left = SKNode()
-        left.position = CGPoint(x: 0, y: size.height / 2)
-        left.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 1, height: size.height))
-        left.physicsBody?.isDynamic = false
-        left.physicsBody?.categoryBitMask = Category.wall.rawValue
-        left.physicsBody?.friction = 0
-        left.physicsBody?.restitution = 1
-        addChild(left)
-
-        let right = SKNode()
-        right.position = CGPoint(x: size.width, y: size.height / 2)
-        right.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 1, height: size.height))
-        right.physicsBody?.isDynamic = false
-        right.physicsBody?.categoryBitMask = Category.wall.rawValue
-        right.physicsBody?.friction = 0
-        right.physicsBody?.restitution = 1
-        addChild(right)
+        for xPos in [CGFloat(0), size.width] {
+            let wall = SKNode()
+            wall.name = "wall"
+            wall.position = CGPoint(x: xPos, y: size.height / 2)
+            wall.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: 1, height: size.height))
+            wall.physicsBody?.isDynamic = false
+            wall.physicsBody?.categoryBitMask = Category.wall.rawValue
+            wall.physicsBody?.contactTestBitMask = Category.ball.rawValue
+            wall.physicsBody?.friction = 0
+            wall.physicsBody?.restitution = 1
+            addChild(wall)
+        }
     }
 
     private func createGoalZones() {
-        // Bottom goal (AI scores)
         let bottomGoal = SKNode()
         bottomGoal.name = "bottomGoal"
         bottomGoal.position = CGPoint(x: size.width / 2, y: -10)
@@ -92,7 +109,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         bottomGoal.physicsBody?.collisionBitMask = 0
         addChild(bottomGoal)
 
-        // Top goal (Player scores)
         let topGoal = SKNode()
         topGoal.name = "topGoal"
         topGoal.position = CGPoint(x: size.width / 2, y: size.height + 10)
@@ -105,12 +121,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func createPaddles() {
+        let paddleOffset: CGFloat = 60
+
         playerPaddle = makePaddle()
-        playerPaddle.position = CGPoint(x: size.width / 2, y: paddleOffset)
+        playerPaddle.name = "playerPaddle"
+        playerPaddle.position = CGPoint(x: size.width / 2, y: max(paddleOffset, safeAreaBottom + 20))
         addChild(playerPaddle)
 
         aiPaddle = makePaddle()
-        aiPaddle.position = CGPoint(x: size.width / 2, y: size.height - paddleOffset)
+        aiPaddle.name = "aiPaddle"
+        aiPaddle.position = CGPoint(x: size.width / 2, y: min(size.height - paddleOffset, size.height - safeAreaTop - 20))
         addChild(aiPaddle)
     }
 
@@ -135,7 +155,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         ball.physicsBody = SKPhysicsBody(circleOfRadius: ballRadius)
         ball.physicsBody?.isDynamic = true
         ball.physicsBody?.categoryBitMask = Category.ball.rawValue
-        ball.physicsBody?.contactTestBitMask = Category.goal.rawValue | Category.paddle.rawValue
+        ball.physicsBody?.contactTestBitMask = Category.goal.rawValue | Category.paddle.rawValue | Category.wall.rawValue
         ball.physicsBody?.collisionBitMask = Category.paddle.rawValue | Category.wall.rawValue
         ball.physicsBody?.friction = 0
         ball.physicsBody?.restitution = 1
@@ -194,7 +214,76 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func prepareHaptics() {
         paddleHitFeedback.prepare()
+        wallHitFeedback.prepare()
         goalFeedback.prepare()
+    }
+
+    // MARK: - Audio
+
+    private func prepareAudio() {
+        audioEngine = AVAudioEngine()
+        playerNode = AVAudioPlayerNode()
+        audioEngine.attach(playerNode)
+
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: format)
+
+        paddleToneBuffer = generateTone(frequency: 480, duration: 0.05, format: format)
+        wallToneBuffer = generateTone(frequency: 320, duration: 0.03, format: format)
+        scoreToneBuffer = generateTone(frequency: 220, duration: 0.3, format: format)
+        winToneBuffer = generateTone(frequency: 660, duration: 0.5, format: format)
+
+        do {
+            try audioEngine.start()
+            playerNode.play()
+        } catch {
+            // Audio unavailable — game still works via haptics
+        }
+    }
+
+    private func generateTone(frequency: Double, duration: Double, format: AVAudioFormat) -> AVAudioPCMBuffer {
+        let sampleRate = format.sampleRate
+        let frameCount = AVAudioFrameCount(duration * sampleRate)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        buffer.frameLength = frameCount
+        let data = buffer.floatChannelData![0]
+        for i in 0..<Int(frameCount) {
+            let t = Double(i) / sampleRate
+            let envelope = max(0, 1.0 - t / duration)  // linear fade-out
+            data[i] = Float(sin(2.0 * .pi * frequency * t) * envelope * 0.3)
+        }
+        return buffer
+    }
+
+    private func playSound(_ buffer: AVAudioPCMBuffer) {
+        guard audioEngine.isRunning else { return }
+        playerNode.scheduleBuffer(buffer, at: nil, options: [], completionHandler: nil)
+    }
+
+    // MARK: - App Lifecycle
+
+    private func observeAppLifecycle() {
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification, object: nil
+        )
+    }
+
+    @objc private func appDidEnterBackground() {
+        if isPlaying {
+            isPaused = true
+        }
+    }
+
+    @objc private func appWillEnterForeground() {
+        if isPaused {
+            isPaused = false
+            lastUpdateTime = 0
+        }
     }
 
     // MARK: - Game Flow
@@ -212,14 +301,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func launchBall() {
         isPlaying = true
         messageLabel.isHidden = true
+        currentBallSpeed = baseBallSpeed
+        rallyCount = 0
 
         ball.position = CGPoint(x: size.width / 2, y: size.height / 2)
         ball.physicsBody?.velocity = .zero
 
         let angle = CGFloat.random(in: .pi / 6 ... .pi / 3) * (Bool.random() ? 1 : -1)
         let direction: CGFloat = Bool.random() ? 1 : -1
-        let dx = sin(angle) * ballSpeed
-        let dy = cos(angle) * ballSpeed * direction
+        let dx = sin(angle) * currentBallSpeed
+        let dy = cos(angle) * currentBallSpeed * direction
 
         ball.physicsBody?.velocity = CGVector(dx: dx, dy: dy)
     }
@@ -238,11 +329,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             aiScoreLabel.text = "\(aiScore)"
             goalFeedback.notificationOccurred(.warning)
         }
+        playSound(scoreToneBuffer)
 
-        if playerScore >= 7 {
+        if playerScore >= winScore {
+            playSound(winToneBuffer)
             showMessage("You Win! Tap to Restart")
             resetScores()
-        } else if aiScore >= 7 {
+        } else if aiScore >= winScore {
             showMessage("You Lose! Tap to Restart")
             resetScores()
         } else {
@@ -257,6 +350,26 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         aiScore = 0
         playerScoreLabel.text = "0"
         aiScoreLabel.text = "0"
+    }
+
+    // MARK: - Paddle Angle Deflection
+
+    private func applyPaddleDeflection(paddle: SKShapeNode) {
+        guard var velocity = ball.physicsBody?.velocity else { return }
+
+        // Offset from paddle center: -1 (left edge) to +1 (right edge)
+        let offset = (ball.position.x - paddle.position.x) / (paddleWidth / 2)
+        let clampedOffset = max(-1, min(1, offset))
+
+        // Max deflection angle: 60 degrees from vertical
+        let maxAngle: CGFloat = .pi / 3
+        let angle = clampedOffset * maxAngle
+
+        let direction: CGFloat = velocity.dy > 0 ? 1 : -1
+        velocity.dx = sin(angle) * currentBallSpeed
+        velocity.dy = cos(angle) * currentBallSpeed * direction
+
+        ball.physicsBody?.velocity = velocity
     }
 
     // MARK: - Touches
@@ -295,13 +408,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Normalize ball speed and prevent horizontal stalling
         guard var velocity = ball.physicsBody?.velocity else { return }
-        let minVertical = ballSpeed * 0.3
+        let minVertical = currentBallSpeed * 0.3
         if abs(velocity.dy) < minVertical {
             velocity.dy = velocity.dy >= 0 ? minVertical : -minVertical
         }
         let speed = hypot(velocity.dx, velocity.dy)
         if speed > 0 {
-            let scale = ballSpeed / speed
+            let scale = currentBallSpeed / speed
             ball.physicsBody?.velocity = CGVector(dx: velocity.dx * scale, dy: velocity.dy * scale)
         }
     }
@@ -323,8 +436,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 scored(byPlayer: false)
             }
         } else if combined == Category.ball.rawValue | Category.paddle.rawValue {
+            rallyCount += 1
+            currentBallSpeed = min(maxBallSpeed, baseBallSpeed + CGFloat(rallyCount) * speedIncrement)
+
+            let paddleNode = contact.bodyA.categoryBitMask == Category.paddle.rawValue
+                ? contact.bodyA.node as? SKShapeNode
+                : contact.bodyB.node as? SKShapeNode
+            if let paddle = paddleNode {
+                applyPaddleDeflection(paddle: paddle)
+            }
+
             paddleHitFeedback.impactOccurred()
             paddleHitFeedback.prepare()
+            playSound(paddleToneBuffer)
+        } else if combined == Category.ball.rawValue | Category.wall.rawValue {
+            wallHitFeedback.impactOccurred()
+            wallHitFeedback.prepare()
+            playSound(wallToneBuffer)
         }
     }
 }
