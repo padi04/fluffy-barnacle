@@ -222,6 +222,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // MARK: - Audio
 
     private func prepareAudio() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.ambient, mode: .default)
+            try session.setActive(true)
+        } catch {
+            // Audio session unavailable — game still works via haptics
+            return
+        }
+
         audioEngine = AVAudioEngine()
         playerNode = AVAudioPlayerNode()
         audioEngine.attach(playerNode)
@@ -238,7 +247,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             try audioEngine.start()
             playerNode.play()
         } catch {
-            // Audio unavailable — game still works via haptics
+            // Audio engine unavailable — game still works via haptics
         }
     }
 
@@ -284,6 +293,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if isPaused {
             isPaused = false
             lastUpdateTime = 0
+        }
+        // Restart audio engine — iOS deactivates it on background
+        if let engine = audioEngine, !engine.isRunning {
+            try? AVAudioSession.sharedInstance().setActive(true)
+            try? engine.start()
+            playerNode?.play()
         }
     }
 
