@@ -32,7 +32,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var playerScore = 0
     private var aiScore = 0
     private var isPlaying = false
-    private var playerTouchX: CGFloat?
+    private var lastUpdateTime: TimeInterval = 0
 
     // MARK: - Setup
 
@@ -81,6 +81,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         bottomGoal.physicsBody?.isDynamic = false
         bottomGoal.physicsBody?.categoryBitMask = Category.goal.rawValue
         bottomGoal.physicsBody?.contactTestBitMask = Category.ball.rawValue
+        bottomGoal.physicsBody?.collisionBitMask = 0
         addChild(bottomGoal)
 
         // Top goal (Player scores)
@@ -91,6 +92,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         topGoal.physicsBody?.isDynamic = false
         topGoal.physicsBody?.categoryBitMask = Category.goal.rawValue
         topGoal.physicsBody?.contactTestBitMask = Category.ball.rawValue
+        topGoal.physicsBody?.collisionBitMask = 0
         addChild(topGoal)
     }
 
@@ -230,56 +232,56 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // MARK: - Touches
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
-
         if !isPlaying {
             launchBall()
             return
         }
 
-        playerTouchX = touch.location(in: self).x
+        guard let touch = touches.first else { return }
+        movePaddle(to: touch.location(in: self).x)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first, isPlaying else { return }
-        let x = touch.location(in: self).x
-        let clampedX = max(paddleWidth / 2, min(size.width - paddleWidth / 2, x))
-        playerPaddle.position.x = clampedX
-        playerTouchX = x
+        movePaddle(to: touch.location(in: self).x)
     }
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        playerTouchX = nil
+    private func movePaddle(to x: CGFloat) {
+        playerPaddle.position.x = max(paddleWidth / 2, min(size.width - paddleWidth / 2, x))
     }
 
     // MARK: - Update
 
     override func update(_ currentTime: TimeInterval) {
+        let dt = lastUpdateTime > 0 ? currentTime - lastUpdateTime : 1.0 / 60.0
+        lastUpdateTime = currentTime
+
         guard isPlaying else { return }
 
-        // AI tracks the ball with slight delay
-        let targetX = ball.position.x
-        let diff = targetX - aiPaddle.position.x
-        let movement = diff * aiSpeed * CGFloat(1.0 / 60.0) * 4
-        let newX = aiPaddle.position.x + movement
+        // AI tracks the ball with slight delay using real delta time
+        let diff = ball.position.x - aiPaddle.position.x
+        let newX = aiPaddle.position.x + diff * aiSpeed * CGFloat(dt) * 4
         aiPaddle.position.x = max(paddleWidth / 2, min(size.width - paddleWidth / 2, newX))
 
-        // Enforce minimum ball speed
-        if let velocity = ball.physicsBody?.velocity {
-            let speed = sqrt(velocity.dx * velocity.dx + velocity.dy * velocity.dy)
-            if speed < ballSpeed * 0.8 && speed > 0 {
-                let scale = ballSpeed / speed
-                ball.physicsBody?.velocity = CGVector(dx: velocity.dx * scale, dy: velocity.dy * scale)
-            }
+        // Normalize ball speed and prevent horizontal stalling
+        guard var velocity = ball.physicsBody?.velocity else { return }
+        let minVertical: CGFloat = ballSpeed * 0.3
+        if abs(velocity.dy) < minVertical {
+            velocity.dy = velocity.dy >= 0 ? minVertical : -minVertical
+        }
+        let speed = sqrt(velocity.dx * velocity.dx + velocity.dy * velocity.dy)
+        if speed > 0 {
+            let scale = ballSpeed / speed
+            ball.physicsBody?.velocity = CGVector(dx: velocity.dx * scale, dy: velocity.dy * scale)
         }
     }
 
     // MARK: - Physics Contact
 
     func didBegin(_ contact: SKPhysicsContact) {
-        let bodies = [contact.bodyA, contact.bodyB]
-        let names = bodies.compactMap { $0.node?.name }
+        guard isPlaying else { return }
 
+        let names = [contact.bodyA.node?.name, contact.bodyB.node?.name]
         if names.contains("topGoal") {
             scored(byPlayer: true)
         } else if names.contains("bottomGoal") {
