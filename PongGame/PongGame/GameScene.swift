@@ -1,4 +1,5 @@
 import SpriteKit
+import UIKit
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
 
@@ -27,6 +28,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var aiScoreLabel: SKLabelNode!
     private var messageLabel: SKLabelNode!
 
+    // MARK: - Haptics
+
+    private let paddleHitFeedback = UIImpactFeedbackGenerator(style: .medium)
+    private let goalFeedback = UINotificationFeedbackGenerator()
+
     // MARK: - State
 
     private var playerScore = 0
@@ -47,7 +53,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         createPaddles()
         createBall()
         createScoreLabels()
+        createCenterLine()
         createMessageLabel()
+        prepareHaptics()
 
         showMessage("Tap to Start")
     }
@@ -127,7 +135,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         ball.physicsBody = SKPhysicsBody(circleOfRadius: ballRadius)
         ball.physicsBody?.isDynamic = true
         ball.physicsBody?.categoryBitMask = Category.ball.rawValue
-        ball.physicsBody?.contactTestBitMask = Category.goal.rawValue
+        ball.physicsBody?.contactTestBitMask = Category.goal.rawValue | Category.paddle.rawValue
         ball.physicsBody?.collisionBitMask = Category.paddle.rawValue | Category.wall.rawValue
         ball.physicsBody?.friction = 0
         ball.physicsBody?.restitution = 1
@@ -142,7 +150,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         playerScoreLabel.fontSize = 48
         playerScoreLabel.fontColor = .white
         playerScoreLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 60)
-        playerScoreLabel.alpha = 0.3
+        playerScoreLabel.alpha = 0.5
         playerScoreLabel.text = "0"
         addChild(playerScoreLabel)
 
@@ -150,22 +158,27 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         aiScoreLabel.fontSize = 48
         aiScoreLabel.fontColor = .white
         aiScoreLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 20)
-        aiScoreLabel.alpha = 0.3
+        aiScoreLabel.alpha = 0.5
         aiScoreLabel.text = "0"
         addChild(aiScoreLabel)
+    }
 
-        // Center line
+    private func createCenterLine() {
         let dashes = 30
         let dashHeight: CGFloat = 4
         let gap = size.height / CGFloat(dashes * 2)
+        let path = CGMutablePath()
+        let centerX = size.width / 2
         for i in 0..<dashes {
-            let dash = SKShapeNode(rectOf: CGSize(width: 2, height: dashHeight))
-            dash.fillColor = .white
-            dash.strokeColor = .clear
-            dash.alpha = 0.2
-            dash.position = CGPoint(x: size.width / 2, y: gap + CGFloat(i) * gap * 2)
-            addChild(dash)
+            let y = gap + CGFloat(i) * gap * 2
+            path.addRect(CGRect(x: centerX - 1, y: y - dashHeight / 2, width: 2, height: dashHeight))
         }
+        let line = SKShapeNode(path: path)
+        line.fillColor = .white
+        line.strokeColor = .clear
+        line.alpha = 0.2
+        line.isUserInteractionEnabled = false
+        addChild(line)
     }
 
     private func createMessageLabel() {
@@ -177,11 +190,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         addChild(messageLabel)
     }
 
+    // MARK: - Haptics
+
+    private func prepareHaptics() {
+        paddleHitFeedback.prepare()
+        goalFeedback.prepare()
+    }
+
     // MARK: - Game Flow
 
     private func showMessage(_ text: String) {
         messageLabel.text = text
         messageLabel.isHidden = false
+        postAccessibilityAnnouncement(text)
+    }
+
+    private func postAccessibilityAnnouncement(_ message: String) {
+        UIAccessibility.post(notification: .announcement, argument: message)
     }
 
     private func launchBall() {
@@ -207,26 +232,31 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if byPlayer {
             playerScore += 1
             playerScoreLabel.text = "\(playerScore)"
+            goalFeedback.notificationOccurred(.success)
         } else {
             aiScore += 1
             aiScoreLabel.text = "\(aiScore)"
+            goalFeedback.notificationOccurred(.warning)
         }
 
         if playerScore >= 7 {
             showMessage("You Win! Tap to Restart")
-            playerScore = 0
-            aiScore = 0
-            playerScoreLabel.text = "0"
-            aiScoreLabel.text = "0"
+            resetScores()
         } else if aiScore >= 7 {
             showMessage("You Lose! Tap to Restart")
-            playerScore = 0
-            aiScore = 0
-            playerScoreLabel.text = "0"
-            aiScoreLabel.text = "0"
+            resetScores()
         } else {
+            let announcement = "Player \(playerScore), Opponent \(aiScore). Tap to Serve"
             showMessage("Tap to Serve")
+            postAccessibilityAnnouncement(announcement)
         }
+    }
+
+    private func resetScores() {
+        playerScore = 0
+        aiScore = 0
+        playerScoreLabel.text = "0"
+        aiScoreLabel.text = "0"
     }
 
     // MARK: - Touches
@@ -265,11 +295,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         // Normalize ball speed and prevent horizontal stalling
         guard var velocity = ball.physicsBody?.velocity else { return }
-        let minVertical: CGFloat = ballSpeed * 0.3
+        let minVertical = ballSpeed * 0.3
         if abs(velocity.dy) < minVertical {
             velocity.dy = velocity.dy >= 0 ? minVertical : -minVertical
         }
-        let speed = sqrt(velocity.dx * velocity.dx + velocity.dy * velocity.dy)
+        let speed = hypot(velocity.dx, velocity.dy)
         if speed > 0 {
             let scale = ballSpeed / speed
             ball.physicsBody?.velocity = CGVector(dx: velocity.dx * scale, dy: velocity.dy * scale)
@@ -281,11 +311,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     func didBegin(_ contact: SKPhysicsContact) {
         guard isPlaying else { return }
 
-        let names = [contact.bodyA.node?.name, contact.bodyB.node?.name]
-        if names.contains("topGoal") {
-            scored(byPlayer: true)
-        } else if names.contains("bottomGoal") {
-            scored(byPlayer: false)
+        let maskA = contact.bodyA.categoryBitMask
+        let maskB = contact.bodyB.categoryBitMask
+        let combined = maskA | maskB
+
+        if combined & Category.goal.rawValue != 0 {
+            let names = [contact.bodyA.node?.name, contact.bodyB.node?.name]
+            if names.contains("topGoal") {
+                scored(byPlayer: true)
+            } else if names.contains("bottomGoal") {
+                scored(byPlayer: false)
+            }
+        } else if combined == Category.ball.rawValue | Category.paddle.rawValue {
+            paddleHitFeedback.impactOccurred()
+            paddleHitFeedback.prepare()
         }
     }
 }

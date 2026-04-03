@@ -8,6 +8,10 @@ class GameViewController: UIViewController {
 
         let skView = SKView(frame: view.bounds)
         skView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        skView.isAccessibilityElement = true
+        skView.accessibilityLabel = "Pong Game"
+        skView.accessibilityHint = "Tap to start. Drag to move your paddle."
+        skView.accessibilityTraits = .allowsDirectInteraction
         view.addSubview(skView)
 
         let scene = GameScene(size: skView.bounds.size)
