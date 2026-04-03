@@ -15,6 +15,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private let paddleWidth: CGFloat = 100
     private let paddleHeight: CGFloat = 16
+    private let touchOffsetY: CGFloat = 40
     private let ballRadius: CGFloat = 10
     private let baseBallSpeed: CGFloat = 400
     private let maxBallSpeed: CGFloat = 650
@@ -125,7 +126,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         playerPaddle = makePaddle()
         playerPaddle.name = "playerPaddle"
-        playerPaddle.position = CGPoint(x: size.width / 2, y: max(paddleOffset, safeAreaBottom + 20))
+        playerPaddle.position = CGPoint(x: size.width / 2, y: max(paddleOffset, safeAreaBottom + touchOffsetY))
         addChild(playerPaddle)
 
         aiPaddle = makePaddle()
@@ -381,15 +382,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
 
         guard let touch = touches.first else { return }
-        movePaddle(to: touch.location(in: self).x)
+        let pos = touch.location(in: self)
+        movePaddle(to: pos.x, touchY: pos.y)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first, isPlaying else { return }
-        movePaddle(to: touch.location(in: self).x)
+        let pos = touch.location(in: self)
+        movePaddle(to: pos.x, touchY: pos.y)
     }
 
-    private func movePaddle(to x: CGFloat) {
+    private func movePaddle(to x: CGFloat, touchY: CGFloat) {
+        // Only respond to touches in the lower half of the screen
+        guard touchY < size.height / 2 else { return }
         playerPaddle.position.x = max(paddleWidth / 2, min(size.width - paddleWidth / 2, x))
     }
 

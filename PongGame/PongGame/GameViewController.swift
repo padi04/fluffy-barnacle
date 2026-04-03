@@ -10,7 +10,7 @@ class GameViewController: UIViewController {
         skView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         skView.isAccessibilityElement = true
         skView.accessibilityLabel = "Pong Game"
-        skView.accessibilityHint = "Tap to start. Drag to move your paddle."
+        skView.accessibilityHint = "Tap to start. Drag in the lower half to move your paddle."
         skView.accessibilityTraits = .allowsDirectInteraction
         view.addSubview(skView)
 
