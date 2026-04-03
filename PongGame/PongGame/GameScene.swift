@@ -13,6 +13,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         case goal   = 0x8
     }
 
+    private let phosphorGreen = UIColor(red: 0.2, green: 1.0, blue: 0.3, alpha: 1.0)
+
     private let paddleWidth: CGFloat = 100
     private let paddleHeight: CGFloat = 16
     private let touchOffsetY: CGFloat = 40
@@ -26,11 +28,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // MARK: - Nodes
 
     private var ball: SKShapeNode!
+    private var ballGlow: SKEffectNode!
     private var playerPaddle: SKShapeNode!
     private var aiPaddle: SKShapeNode!
     private var playerScoreLabel: SKLabelNode!
     private var aiScoreLabel: SKLabelNode!
     private var messageLabel: SKLabelNode!
+    private var scanlineOverlay: SKSpriteNode!
 
     // MARK: - Haptics
 
@@ -61,7 +65,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // MARK: - Setup
 
     override func didMove(to view: SKView) {
-        backgroundColor = .black
+        backgroundColor = UIColor(red: 0.02, green: 0.02, blue: 0.05, alpha: 1.0)
 
         let insets = view.safeAreaInsets
         safeAreaBottom = insets.bottom
@@ -77,12 +81,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         createScoreLabels()
         createCenterLine()
         createMessageLabel()
+        createScanlines()
+        createScreenBorder()
+        createVignette()
         prepareHaptics()
         prepareAudio()
         observeAppLifecycle()
 
-        showMessage("Tap to Start")
+        showMessage("TAP TO START")
     }
+
+    // MARK: - Visual Setup
 
     private func createWalls() {
         for xPos in [CGFloat(0), size.width] {
@@ -136,9 +145,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func makePaddle() -> SKShapeNode {
-        let paddle = SKShapeNode(rectOf: CGSize(width: paddleWidth, height: paddleHeight), cornerRadius: 8)
-        paddle.fillColor = .white
+        let paddle = SKShapeNode(rectOf: CGSize(width: paddleWidth, height: paddleHeight), cornerRadius: 2)
+        paddle.fillColor = phosphorGreen
         paddle.strokeColor = .clear
+        paddle.glowWidth = 4
         paddle.physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: paddleWidth, height: paddleHeight))
         paddle.physicsBody?.isDynamic = false
         paddle.physicsBody?.categoryBitMask = Category.paddle.rawValue
@@ -148,9 +158,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func createBall() {
+        // Glow container
+        ballGlow = SKEffectNode()
+        ballGlow.shouldRasterize = true
+        ballGlow.filter = CIFilter(name: "CIGaussianBlur", parameters: ["inputRadius": 8.0])
+        ballGlow.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        addChild(ballGlow)
+
+        let glowDot = SKShapeNode(circleOfRadius: ballRadius * 1.5)
+        glowDot.fillColor = phosphorGreen.withAlphaComponent(0.4)
+        glowDot.strokeColor = .clear
+        ballGlow.addChild(glowDot)
+
+        // Actual ball
         ball = SKShapeNode(circleOfRadius: ballRadius)
-        ball.fillColor = .white
+        ball.fillColor = phosphorGreen
         ball.strokeColor = .clear
+        ball.glowWidth = 2
         ball.position = CGPoint(x: size.width / 2, y: size.height / 2)
 
         ball.physicsBody = SKPhysicsBody(circleOfRadius: ballRadius)
@@ -167,48 +191,121 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func createScoreLabels() {
-        playerScoreLabel = SKLabelNode(fontNamed: "Helvetica-Bold")
-        playerScoreLabel.fontSize = 48
-        playerScoreLabel.fontColor = .white
+        playerScoreLabel = makeScoreLabel()
         playerScoreLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 - 60)
-        playerScoreLabel.alpha = 0.5
-        playerScoreLabel.text = "0"
         addChild(playerScoreLabel)
 
-        aiScoreLabel = SKLabelNode(fontNamed: "Helvetica-Bold")
-        aiScoreLabel.fontSize = 48
-        aiScoreLabel.fontColor = .white
+        aiScoreLabel = makeScoreLabel()
         aiScoreLabel.position = CGPoint(x: size.width / 2, y: size.height / 2 + 20)
-        aiScoreLabel.alpha = 0.5
-        aiScoreLabel.text = "0"
         addChild(aiScoreLabel)
+    }
+
+    private func makeScoreLabel() -> SKLabelNode {
+        let label = SKLabelNode(fontNamed: "Courier-Bold")
+        label.fontSize = 64
+        label.fontColor = phosphorGreen
+        label.alpha = 0.25
+        label.text = "0"
+        return label
     }
 
     private func createCenterLine() {
         let dashes = 30
-        let dashHeight: CGFloat = 4
+        let dashHeight: CGFloat = 6
         let gap = size.height / CGFloat(dashes * 2)
         let path = CGMutablePath()
         let centerX = size.width / 2
         for i in 0..<dashes {
             let y = gap + CGFloat(i) * gap * 2
-            path.addRect(CGRect(x: centerX - 1, y: y - dashHeight / 2, width: 2, height: dashHeight))
+            path.addRect(CGRect(x: centerX - 1.5, y: y - dashHeight / 2, width: 3, height: dashHeight))
         }
         let line = SKShapeNode(path: path)
-        line.fillColor = .white
+        line.fillColor = phosphorGreen
         line.strokeColor = .clear
-        line.alpha = 0.2
+        line.alpha = 0.15
         line.isUserInteractionEnabled = false
         addChild(line)
     }
 
     private func createMessageLabel() {
-        messageLabel = SKLabelNode(fontNamed: "Helvetica-Bold")
-        messageLabel.fontSize = 28
-        messageLabel.fontColor = .white
+        messageLabel = SKLabelNode(fontNamed: "Courier-Bold")
+        messageLabel.fontSize = 24
+        messageLabel.fontColor = phosphorGreen
         messageLabel.position = CGPoint(x: size.width / 2, y: size.height / 2)
         messageLabel.isHidden = true
         addChild(messageLabel)
+    }
+
+    private func createScanlines() {
+        let scanlineSpacing: CGFloat = 3
+        let lineCount = Int(size.height / scanlineSpacing)
+
+        UIGraphicsBeginImageContextWithOptions(CGSize(width: 1, height: size.height), false, 1.0)
+        guard let ctx = UIGraphicsGetCurrentContext() else { return }
+
+        ctx.setFillColor(UIColor.black.cgColor)
+        for i in stride(from: 0, to: lineCount, by: 2) {
+            ctx.fill(CGRect(x: 0, y: CGFloat(i) * scanlineSpacing, width: 1, height: 1))
+        }
+
+        guard let image = UIGraphicsGetImageFromCurrentImageContext() else {
+            UIGraphicsEndImageContext()
+            return
+        }
+        UIGraphicsEndImageContext()
+
+        let texture = SKTexture(image: image)
+        texture.filteringMode = .nearest
+        scanlineOverlay = SKSpriteNode(texture: texture, size: size)
+        scanlineOverlay.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        scanlineOverlay.alpha = 0.12
+        scanlineOverlay.zPosition = 100
+        scanlineOverlay.isUserInteractionEnabled = false
+        addChild(scanlineOverlay)
+    }
+
+    private func createScreenBorder() {
+        let border = SKShapeNode(rectOf: CGSize(width: size.width - 16, height: size.height - 16), cornerRadius: 8)
+        border.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        border.fillColor = .clear
+        border.strokeColor = phosphorGreen.withAlphaComponent(0.15)
+        border.lineWidth = 2
+        border.glowWidth = 3
+        border.zPosition = 99
+        border.isUserInteractionEnabled = false
+        addChild(border)
+    }
+
+    private func createVignette() {
+        let vignetteSize = max(size.width, size.height) * 1.2
+        UIGraphicsBeginImageContextWithOptions(CGSize(width: vignetteSize, height: vignetteSize), false, 1.0)
+        guard let ctx = UIGraphicsGetCurrentContext() else { return }
+
+        let colors = [
+            UIColor.clear.cgColor,
+            UIColor.clear.cgColor,
+            UIColor.black.withAlphaComponent(0.6).cgColor,
+            UIColor.black.withAlphaComponent(0.9).cgColor
+        ] as CFArray
+        let locations: [CGFloat] = [0.0, 0.4, 0.75, 1.0]
+        let center = CGPoint(x: vignetteSize / 2, y: vignetteSize / 2)
+        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
+            ctx.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: vignetteSize / 2, options: .drawsAfterEndLocation)
+        }
+
+        guard let image = UIGraphicsGetImageFromCurrentImageContext() else {
+            UIGraphicsEndImageContext()
+            return
+        }
+        UIGraphicsEndImageContext()
+
+        let texture = SKTexture(image: image)
+        let vignette = SKSpriteNode(texture: texture, size: CGSize(width: vignetteSize, height: vignetteSize))
+        vignette.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        vignette.zPosition = 101
+        vignette.isUserInteractionEnabled = false
+        vignette.blendMode = .multiply
+        addChild(vignette)
     }
 
     // MARK: - Haptics
@@ -227,7 +324,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             try session.setCategory(.ambient, mode: .default)
             try session.setActive(true)
         } catch {
-            // Audio session unavailable — game still works via haptics
             return
         }
 
@@ -238,20 +334,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: format)
 
-        paddleToneBuffer = generateTone(frequency: 480, duration: 0.05, format: format)
-        wallToneBuffer = generateTone(frequency: 320, duration: 0.03, format: format)
-        scoreToneBuffer = generateTone(frequency: 220, duration: 0.3, format: format)
-        winToneBuffer = generateTone(frequency: 660, duration: 0.5, format: format)
+        // Square wave tones for retro feel
+        paddleToneBuffer = generateSquareTone(frequency: 480, duration: 0.06, format: format)
+        wallToneBuffer = generateSquareTone(frequency: 320, duration: 0.04, format: format)
+        scoreToneBuffer = generateSquareTone(frequency: 160, duration: 0.35, format: format)
+        winToneBuffer = generateArpeggio(frequencies: [330, 415, 523, 660], noteDuration: 0.12, format: format)
 
         do {
             try audioEngine.start()
             playerNode.play()
         } catch {
-            // Audio engine unavailable — game still works via haptics
+            // Audio engine unavailable
         }
     }
 
-    private func generateTone(frequency: Double, duration: Double, format: AVAudioFormat) -> AVAudioPCMBuffer {
+    private func generateSquareTone(frequency: Double, duration: Double, format: AVAudioFormat) -> AVAudioPCMBuffer {
         let sampleRate = format.sampleRate
         let frameCount = AVAudioFrameCount(duration * sampleRate)
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
@@ -259,14 +356,34 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let data = buffer.floatChannelData![0]
         for i in 0..<Int(frameCount) {
             let t = Double(i) / sampleRate
-            let envelope = max(0, 1.0 - t / duration)  // linear fade-out
-            data[i] = Float(sin(2.0 * .pi * frequency * t) * envelope * 0.3)
+            let envelope = max(0, 1.0 - t / duration)
+            let wave = sin(2.0 * .pi * frequency * t) >= 0 ? 1.0 : -1.0
+            data[i] = Float(wave * envelope * 0.2)
+        }
+        return buffer
+    }
+
+    private func generateArpeggio(frequencies: [Double], noteDuration: Double, format: AVAudioFormat) -> AVAudioPCMBuffer {
+        let sampleRate = format.sampleRate
+        let totalDuration = noteDuration * Double(frequencies.count)
+        let frameCount = AVAudioFrameCount(totalDuration * sampleRate)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
+        buffer.frameLength = frameCount
+        let data = buffer.floatChannelData![0]
+        for i in 0..<Int(frameCount) {
+            let t = Double(i) / sampleRate
+            let noteIndex = min(Int(t / noteDuration), frequencies.count - 1)
+            let freq = frequencies[noteIndex]
+            let noteT = t - Double(noteIndex) * noteDuration
+            let envelope = max(0, 1.0 - noteT / noteDuration)
+            let wave = sin(2.0 * .pi * freq * t) >= 0 ? 1.0 : -1.0
+            data[i] = Float(wave * envelope * 0.18)
         }
         return buffer
     }
 
     private func playSound(_ buffer: AVAudioPCMBuffer) {
-        guard audioEngine.isRunning else { return }
+        guard audioEngine?.isRunning == true else { return }
         playerNode.scheduleBuffer(buffer, at: nil, options: [], completionHandler: nil)
     }
 
@@ -294,7 +411,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             isPaused = false
             lastUpdateTime = 0
         }
-        // Restart audio engine — iOS deactivates it on background
         if let engine = audioEngine, !engine.isRunning {
             try? AVAudioSession.sharedInstance().setActive(true)
             try? engine.start()
@@ -307,6 +423,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func showMessage(_ text: String) {
         messageLabel.text = text
         messageLabel.isHidden = false
+        // Blink the message like an arcade attract screen
+        messageLabel.removeAllActions()
+        messageLabel.alpha = 1.0
+        messageLabel.run(.repeatForever(.sequence([
+            .fadeAlpha(to: 0.2, duration: 0.5),
+            .fadeAlpha(to: 1.0, duration: 0.5)
+        ])))
         postAccessibilityAnnouncement(text)
     }
 
@@ -317,6 +440,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func launchBall() {
         isPlaying = true
         messageLabel.isHidden = true
+        messageLabel.removeAllActions()
         currentBallSpeed = baseBallSpeed
         rallyCount = 0
 
@@ -340,25 +464,42 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             playerScore += 1
             playerScoreLabel.text = "\(playerScore)"
             goalFeedback.notificationOccurred(.success)
+            flashLabel(playerScoreLabel)
         } else {
             aiScore += 1
             aiScoreLabel.text = "\(aiScore)"
             goalFeedback.notificationOccurred(.warning)
+            flashLabel(aiScoreLabel)
         }
         playSound(scoreToneBuffer)
 
         if playerScore >= winScore {
             playSound(winToneBuffer)
-            showMessage("You Win! Tap to Restart")
+            showMessage("YOU WIN! TAP TO RESTART")
             resetScores()
         } else if aiScore >= winScore {
-            showMessage("You Lose! Tap to Restart")
+            showMessage("YOU LOSE! TAP TO RESTART")
             resetScores()
         } else {
             let announcement = "Player \(playerScore), Opponent \(aiScore). Tap to Serve"
-            showMessage("Tap to Serve")
+            showMessage("TAP TO SERVE")
             postAccessibilityAnnouncement(announcement)
         }
+    }
+
+    private func flashLabel(_ label: SKLabelNode) {
+        label.run(.sequence([
+            .fadeAlpha(to: 1.0, duration: 0.05),
+            .fadeAlpha(to: 0.25, duration: 0.4)
+        ]))
+    }
+
+    private func flashScreen() {
+        let flash = SKSpriteNode(color: phosphorGreen.withAlphaComponent(0.08), size: size)
+        flash.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        flash.zPosition = 98
+        addChild(flash)
+        flash.run(.sequence([.fadeOut(withDuration: 0.15), .removeFromParent()]))
     }
 
     private func resetScores() {
@@ -373,11 +514,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func applyPaddleDeflection(paddle: SKShapeNode) {
         guard var velocity = ball.physicsBody?.velocity else { return }
 
-        // Offset from paddle center: -1 (left edge) to +1 (right edge)
         let offset = (ball.position.x - paddle.position.x) / (paddleWidth / 2)
         let clampedOffset = max(-1, min(1, offset))
 
-        // Max deflection angle: 60 degrees from vertical
         let maxAngle: CGFloat = .pi / 3
         let angle = clampedOffset * maxAngle
 
@@ -408,7 +547,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func movePaddle(to x: CGFloat, touchY: CGFloat) {
-        // Only respond to touches in the lower half of the screen
         guard touchY < size.height / 2 else { return }
         playerPaddle.position.x = max(paddleWidth / 2, min(size.width - paddleWidth / 2, x))
     }
@@ -421,10 +559,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
         guard isPlaying else { return }
 
-        // AI tracks the ball with slight delay using real delta time
+        // AI tracks the ball
         let diff = ball.position.x - aiPaddle.position.x
         let newX = aiPaddle.position.x + diff * aiSpeed * CGFloat(dt) * 4
         aiPaddle.position.x = max(paddleWidth / 2, min(size.width - paddleWidth / 2, newX))
+
+        // Ball glow follows ball
+        ballGlow.position = ball.position
 
         // Normalize ball speed and prevent horizontal stalling
         guard var velocity = ball.physicsBody?.velocity else { return }
@@ -469,6 +610,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             paddleHitFeedback.impactOccurred()
             paddleHitFeedback.prepare()
             playSound(paddleToneBuffer)
+            flashScreen()
         } else if combined == Category.ball.rawValue | Category.wall.rawValue {
             wallHitFeedback.impactOccurred()
             wallHitFeedback.prepare()
